@@ -1,0 +1,114 @@
+#!/bin/bash
+## Script to start rsync client as a daemon
+## Copyright 2014, Jorge Fonseca - http://jorge.fonseca.ec
+
+## Licensed under the Apache License, Version 2.0 (the "License");
+## you may not use this file except in compliance with the License.
+## You may obtain a copy of the License at
+
+##    http://www.apache.org/licenses/LICENSE-2.0
+
+## Unless required by applicable law or agreed to in writing, software
+## distributed under the License is distributed on an "AS IS" BASIS,
+## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+## See the License for the specific language governing permissions and
+## limitations under the License.
+
+## Check if any argument has been recieved
+if [ "$#" -eq 0 ]; then
+	echo "USAGE: $0 <CONFIGURATION FILE>"
+	echo ""
+	echo "	This script can execute a rsync client instance as a system service."
+	echo "	Configuration is defined in the file given as argument"
+	exit 2
+else
+	CONFIGFILE=$1
+fi
+# Check for depencies
+if [ ! `which which` ]; then
+	echo "FATAL: \"which\" was not found in the system"
+	exit 2
+else
+	REQUERIMENTS='rsync logger nc grep wc ps'
+	for REQ in $REQUERIMENTS
+	do
+		REQCHECK=`which $REQ`
+		if [ ! $REQCHECK ]; then
+			echo "FATAL: \"$REQ\" was not found in the system"
+			exit 2
+		fi
+	done
+fi
+## Check if the configuration file exist
+if [ ! -s "$CONFIGFILE" ] || [ ! -r "$CONFIGFILE" ]; then
+	"FATAL: cannot read $CONFIGFILE"
+	exit 2
+else
+## Read the configuration file if exist
+	. $CONFIGFILE
+fi
+## Check for necesary variables in the config file and exit if not exist
+if [ "$HOST" = "" ]; then
+## Exit if $HOST is not defined
+	echo "FATAL: HOST not defined in $CONFIGFILE"
+	exit 2
+elif [ "$SOURCE" = "" ]; then
+## Exit if $SOURCE is not defined
+	echo "FATAL: SOURCE not defined in $CONFIGFILE"
+	exit 2
+elif [ "$DESTINATION" = "" ]; then
+## Exit if $DESTINATION is not defined
+	echo "FATAL: DESTINATION not defined in $CONFIGFILE"
+	exit 2
+elif [ "$SYNC_INTERVAL" = "" ]; then
+## Exit if $SYNC_INTERVAL is not defined
+	echo "FATAL: SYNC_INTERVAL not defined in $CONFIGFILE"
+	exit 2
+else
+## Set generic tag for logging and define log file if set
+	if [ $LOGFILE ]; then
+		LOGGER_OPTIONS="-f $LOGFILE"
+	fi
+	LOG_TAG="rsyncclientd"
+	LOGGER="logger $LOGGER_OPTIONS -st $LOG_TAG -- "
+## Read optional variables in configuration filename and assign default values
+	if [ "$WAIT_INTERVAL" = "" ]; then
+		WAIT_INTERVAL="300"
+	fi
+	if [ "$OPTIONS" = "" ]; then
+		OPTIONS="-rtvpogl  --delay-updates --delete-delay timeout=60"
+	fi
+## All configurations set, will start the rsync service
+	$LOGGER "Starting RSYNC client with an interval of $SYNC_INTERVAL seconds"
+fi
+## Start the client
+while true;
+do
+	$LOGGER "Trying to synchronize with RSYNC source $SOURCE on destination $DESTINATION..."
+	INSTANCES=`ps faux|grep "rsync"|grep -w "$DESTINATION"|wc -l`
+	if [ "$INSTANCES" -gt "1" ]; then
+		$LOGGER "Seems like another instance of rsync is running on the same destination ($DESTINATION). script ending..."
+		exit 1
+	else
+		if [ "$DEBUG" = "yes" ]; then
+			SYNC_OUTPUT=`rsync $OPTIONS $HOST::$SOURCE $DESTINATION`
+			SYNC_STATUS=$?
+			$LOGGER "\n $SYNC_OUTPUT"
+		else
+			SYNC_OUTPUT=`rsync $OPTIONS -q $HOST::$SOURCE $DESTINATION`
+			SYNC_STATUS=$?
+		fi
+## Write the result of the process to log file
+		if [ "$SYNC_STATUS" -ne "0" ]; then
+			$LOGGER "ERROR: RSYNC fail with status code $SYNC_STATUS"
+			$LOGGER "Retrying in $WAIT_INTERVAL seconds..."
+			sleep $WAIT_INTERVAL
+			continue
+		else
+			$LOGGER "SUCCESS: synchronized with $HOST"
+			$LOGGER "Sleeping for $SYNC_INTERVAL seconds..."
+			sleep $SYNC_INTERVAL || break
+		fi
+	fi
+done
+exit 0

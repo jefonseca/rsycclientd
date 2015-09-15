@@ -1,0 +1,182 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          RSYNC Client
+# Required-Start:    $local_fs $remote_fs
+# Required-Stop:     $local_fs $remote_fs
+# Should-Start:      autofs $network $named
+# Should-Stop:       autofs $network $named
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Multiple instance based RSYNC Client
+# Description:       Start RSYNC client based on multiple instances
+#                    defined on configuration files.
+### END INIT INFO
+
+## Copyright 2014, Jorge Fonseca - http://jorge.fonseca.ec
+
+## Licensed under the Apache License, Version 2.0 (the "License");
+## you may not use this file except in compliance with the License.
+## You may obtain a copy of the License at
+
+##    http://www.apache.org/licenses/LICENSE-2.0
+
+## Unless required by applicable law or agreed to in writing, software
+## distributed under the License is distributed on an "AS IS" BASIS,
+## WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+## See the License for the specific language governing permissions and
+## limitations under the License.
+
+# Do NOT "set -e"
+
+# PATH should only include /usr/* if it runs after the mountnfs.sh script
+PATH=/usr/local/sbin:/usr/local/sbin:/sbin:/usr/sbin:/bin:/usr/bin
+DESC="RSYNC Client"
+NAME=rsyncclientd
+DAEMON=/usr/local/sbin/$NAME
+PIDDIR=/var/run/$NAME
+SCRIPTNAME=/etc/init.d/$NAME
+CONFDIR=/usr/local/etc/$NAME
+DAEMON_ARGS="--options args"
+
+STARTOPTS="--start --oknodo --make-pidfile --background --quiet"
+STOPOPTS="--stop --oknodo"
+
+## this makes the service start as an specific user
+#STARTUSER=rsynclientd
+## Set debug of this script
+#set -x
+
+# Load the VERBOSE setting and other rcS variables
+. /lib/init/vars.sh
+
+# Define LSB log_* functions.
+# Depend on lsb-base (>= 3.2-14) to ensure that this file is present
+# and status_of_proc is working.
+. /lib/lsb/init-functions
+
+# Define the executable path and the location of mpd-monitor script
+# PATH=/sbin:/bin:/usr/sbin:/usr/bin
+# Exit if the package is not installed
+if [ ! -x "$DAEMON" ]; then
+	log_failure_msg "file doesn't exist! please install $DAEMON"
+	exit 1
+# Exit if the configuration file doesn't exist  
+elif [ ! -d "$CONFDIR" ]; then
+	log_failure_msg "configuration directory doesn't exist ($CONFDIR)"
+	exit 1
+# Exit if the configuration directory is empty 
+elif [ `ls -1 $CONFDIR/*.conf 2> /dev/null|wc -l` -eq 0 ]; then
+	log_failure_msg "no configuration files found ($CONFDIR)"
+	exit 1
+fi
+
+# Manage arguments passed to script as instances of the service
+if [ $# -eq 1 ]; then
+	CONFSUFFIX="*.conf"
+        ACTION=$1
+elif [ $# -eq 2 ]; then
+        CONFSUFFIX="$1.conf"
+     	ACTION=$2
+else
+	echo "Usage: $0 {start|stop|restart|force-reload}"
+	exit 2
+fi
+
+## Set the suffix name based on the specific instance
+#$NAME.=" - ${0//*\//}"
+#$NAME.=" - ${0##*/}"
+
+## Check directory for PID files
+if [ ! -d $PIDDIR ]; then
+	mkdir -m 0755 $PIDDIR 
+	if [ $STARTUSER ]; then
+		chown $STARTUSER:$STARTUSER $PIDDIR
+		STARTOPTS="--user $STARTUSER --chuid $STARTUSER"
+	fi
+elif [ $STARTUSER ]; then
+	chown $STARTUSER:$STARTUSER $PIDDIR
+	STARTOPTS="$STARTOPTS --user $STARTUSER"
+fi
+
+for CONF in $CONFDIR/$CONFSUFFIX
+do
+	START=true
+	INSTANCE="${CONF//*\//}"
+	INSTANCE="${INSTANCE//.conf/}"
+## Read default configuration of the instance if exist
+	DEFAULTCONF="/etc/default/$NAME-$INSTANCE"
+	[ -r $DEFAULTCONF ] && . $DEFAULTCONF
+## Check if this instance is disabled in the default configuration file
+	if [ $START != "true" ]; then
+		log_action_msg "($INSTANCE) daemon disabled by $DEFULTCONF"
+		continue
+## Read the configuration file for the instance
+	elif [ ! -s "$CONF" ] || [ ! -r $CONF ]; then
+		log_failure_msg "cannot read $CONF"
+		continue
+	else
+		. $CONF
+	fi
+## Functions
+	do_start () 
+	{
+		`status_of_proc -p "$PIDDIR/$INSTANCE.pid" $DAEMON $CONF > /dev/null`
+		SERVICE_STATUS="$?"
+		if [ $SERVICE_STATUS -eq 1 ] || [ $SERVICE_STATUS -eq 3 ]; then
+			log_daemon_msg "Starting $DESC ($NAME)" "instance \"$INSTANCE\""
+			start-stop-daemon $STARTOPTS --pidfile "$PIDDIR/$INSTANCE.pid" --exec "$DAEMON" -- "$CONF"
+			log_end_msg $?
+		elif [ ! $SERVICE_STATUS ] || [ $SERVICE_STATUS -eq 0 ]; then
+			log_failure_msg "Starting $DESC ($NAME): already running instance \"$INSTANCE\""
+			continue
+		else
+			log_failure_msg "Starting $DESC ($NAME): unknown status of instance \"$INSTANCE\""
+			continue
+		fi
+	}
+	do_stop () 
+	{
+		`status_of_proc -p "$PIDDIR/$INSTANCE.pid" $DAEMON $CONF > /dev/null`
+		SERVICE_STATUS="$?"
+		if [ ! $SERVICE_STATUS ] || [ $SERVICE_STATUS -eq 0 ]; then
+			log_daemon_msg "Stopping $DESC ($NAME)" "instance \"$INSTANCE\""
+			start-stop-daemon $STOPOPTS --pidfile "$PIDDIR/$INSTANCE.pid"
+			log_end_msg $?
+		elif [ $SERVICE_STATUS -eq 1 ] || [ $SERVICE_STATUS -eq 3 ]; then
+			log_failure_msg "Stopping $DESC ($NAME): not running instance \"$INSTANCE\""
+		else
+			log_failure_msg "Stopping $DESC ($NAME): unknown status of instance \"$INSTANCE\""
+		fi
+	}
+
+	case "$ACTION" in
+	    start)
+	        do_start
+	        ;;
+	    stop)
+	        do_stop
+	        ;;
+	    status)
+			status_of_proc -p "$PIDDIR/$INSTANCE.pid" $DAEMON "$CONF ($INSTANCE)"
+			;;
+	    restart|force-reload)
+	        do_stop
+	        do_start
+	        ;;
+	    force-start)
+	        do_start
+	        ;;
+	    force-restart)
+	        do_stop
+	        do_start
+	        ;;
+	    force-reload)
+			do_stop
+			do_start
+			;;
+	    *)
+	        echo "Usage: $0 {start|stop|restart|force-reload}"
+	        exit 2
+	        ;;
+	esac
+done

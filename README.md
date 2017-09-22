@@ -3,7 +3,7 @@ rsycclientd
 
 Script to start rsync client as a daemon
 
-Copyright 2014, Jorge Fonseca - http://jorge.fonseca.ec
+Jorge Fonseca - http://jorge.fonseca.ec
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
